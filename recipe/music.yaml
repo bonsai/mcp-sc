@@ -1,0 +1,31 @@
+# PyPer music workflow: music-json → (LangChain) → SuperCollider NRT → WAV
+#
+#   PYTHONPATH=. python3 lib/mcp_sc.py
+#
+# LLM を使う場合: LLM_PROVIDER=sakura SAKURA_API_KEY=... を設定。
+# LLM を使わず既存 music-json のままレンダリングする場合は
+# filter.langchain_music.Plugin をコメントアウト。
+
+pipeline:
+  name: "music-json → SC NRT BGM"
+
+  # ── Input (Subscription) ──
+  subscription:
+    - module: subscription.music_json.Plugin
+      config:
+        path: ~/repo/show-builder/music/lo-fi-radio-amin.json
+        key: music
+
+  # ── Process (Filter) ──
+  filters:
+    - module: filter.langchain_music.Plugin
+      config:
+        model: zundamon-qwen3-8b
+        prompt: "A minor の lo-fi 深夜ラジオ BGM。72 BPM、60秒。ii-V-I 進行を基本に、AM7 のドリーミーなパッドとルートベース。"
+
+  # ── Output (Publish) ──
+  publish:
+    - module: publish.supercollider.Plugin
+      config:
+        out_dir: out/bgm
+        out_name: bgm.wav

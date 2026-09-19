@@ -35,6 +35,7 @@ def _load_music(path: Path) -> dict:
 
 
 def _score_text(music: dict, out_wav: str) -> str:
+    from plugins.sc_bridge import SYNTHDEF_SC, chord_midi, music_json_to_bars
     rows = music_json_to_bars(music)
     events: list[str] = []
     start = 0.0
@@ -44,34 +45,48 @@ def _score_text(music: dict, out_wav: str) -> str:
         for note in midi:
             freq = 440.0 * 2 ** ((note - 69) / 12)
             events.append(
-                f"[{start:0.3f}, [\\s_new, \\default, {i * 100 + note}, 0, 0, "
+                f"[{start:0.3f}, [\\s_new, \\poc, {i * 100 + note}, 0, 0, "
                 f"\\freq, {freq:.2f}, \\dur, {dur:0.3f}, \\amp, 0.15, \\pan, 0]]"
             )
         start += secs
     score_body = ",\n  ".join(events)
+    out_osc = out_wav.replace(".wav", ".osc") if out_wav.endswith(".wav") else "/tmp/bgm.osc"
     return (
-        f"// BGM NRT Score (music-json via PyPer MCP)\n"
-        f"(Score [\n  {score_body}\n]).recordNRT(\"{out_wav}\");\nquit;\n"
+        f"// BGM NRT Score (music-json via mcp-sc)\n"
+        f"(\n{SYNTHDEF_SC}\n"
+        f"var score = Score([\n"
+        f"  [0.0, [\\d_recv, def.asBytes]],\n"
+        f"  {score_body},\n"
+        f"  [{start + 0.1:0.3f}, [\\c_set, 0, 0]]\n"
+        f"]);\n"
+        f"score.writeOSCFile(\"{out_osc}\");\n"
+        f"0.exit;\n"
+        f")\n"
     )
 
 
 def _render_sc(music: dict, out_wav: Path) -> str:
-    import shutil
-    import subprocess
-    import tempfile
-    sclang = os.environ.get("SCLANG", "sclang")
-    if shutil.which(sclang) is None:
-        raise RuntimeError(
-            f"{sclang} not found. Install:  sudo apt install supercollider"
-        )
-    out_wav.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as tmp:
-        script = Path(tmp) / "bgm.scd"
-        script.write_text(_score_text(music, str(out_wav)), encoding="utf-8")
-        subprocess.run([sclang, "-d", str(tmp), str(script)],
-                       check=True, capture_output=True, text=True)
-    if not out_wav.exists():
-        raise RuntimeError(f"SC NRT produced no output: {out_wav}")
+    # sc_bridge 経由で writeOSCFile → scsynth -N (2段階) 実行
+    from plugins.sc_bridge import _render_events, chord_midi, music_json_to_bars
+    rows = music_json_to_bars(music)
+    events: list[str] = []
+    start = 0.0
+    end_t = start
+    for i, (root, quality, secs, _voice) in enumerate(rows):
+        midi = chord_midi(root, quality)
+        dur = max(0.1, secs - 0.1)
+        for note in midi:
+            events.append(
+                f"[{start:0.3f}, [\\s_new, \\poc, {i * 100 + note}, 0, 0, "
+                f"\\freq, {440.0 * 2 ** ((note - 69) / 12):.2f}, \\dur, {dur:0.3f}, "
+                f"\\amp, 0.15, \\pan, 0]]"
+            )
+        start += secs
+        end_t = start
+    _render_events(events, out_wav,
+                   sclang=os.environ.get("SCLANG", "sclang"),
+                   scsynth=os.environ.get("SCSYNTH", "scsynth"),
+                   end_t=end_t + 0.1)
     return f"rendered: {out_wav} ({out_wav.stat().st_size} bytes)"
 
 
